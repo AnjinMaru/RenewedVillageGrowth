@@ -996,47 +996,113 @@ function GetCargoIDByLabel(label)
     return null;
 }
 
+
 /* HELPER: Takes the sorted String List from GetEconomyCargoList and builds real ID categories */
 function DefineDynamicCargos(economy)
 {
-    // 1. Get the sorted strings (labels) that YOU defined
+    // 1. Get Settings
+    // Check if the user enabled "Use 6 categories" in the script settings
+    local allow_6_cats = (::SettingsTable.rawin("cargo_6_category") && ::SettingsTable.cargo_6_category);
+
+    // 2. Get Cargos (Sorted Labels -> Real IDs)
     local sorted_labels = GetEconomyCargoList(economy, null);
-    
-    // 2. Convert to Real IDs
     local real_ids = [];
     foreach (label in sorted_labels) {
         local id = GetCargoIDByLabel(label);
         if (id != null) real_ids.append(id);
     }
     
-    // 3. Define the Split Points (How many items per category?)
-    // Cat 1: Top 2 items (usually PASS + MAIL)
-    // Cat 2: Next 8 items (Basic Food/Resources)
-    // Cat 3: Next 10 items (Intermediate)
-    // Cat 4: The Rest (Heavy Industry)
-    
+    // 3. Initialize Global Tables
     ::CargoCat <- [];
-    ::CargoCat.append(real_ids.slice(0, 2));   // Cat 1
+    ::CargoCatList <- [];
+    ::CargoMinPopDemand <- [];
+    ::CargoPermille <- [];
+    ::CargoDecay <- [];
+
+    // Helper to add a category easily
+    local AddCat = function(ids, label, pop, perm, dec) {
+        ::CargoCat.append(ids);
+        ::CargoCatList.append(label);
+        ::CargoMinPopDemand.append(pop);
+        ::CargoPermille.append(perm);
+        ::CargoDecay.append(dec);
+    };
     
-    if (real_ids.len() > 10) {
-        ::CargoCat.append(real_ids.slice(2, 10)); // Cat 2 (8 items)
-    } else {
-        ::CargoCat.append(real_ids.slice(2)); // Dump rest
+    // --- Category 1: Public Services (Always Top 2) ---
+    // Usually PASS and MAIL
+    local cat1_slice = real_ids.slice(0, 2);
+    AddCat(cat1_slice, CatLabels.PUBLIC_SERVICES, 0, 60, 0.4);
+    ::CargoLimiter <- cat1_slice; // Town growth strictly depends on this
+
+    // --- Dynamic Slicing for Industry ---
+    local rest = real_ids.slice(2);
+    local count = rest.len();
+    local slices = [];
+    local num_ind_cats = 1; // Default to 1 big pile
+
+    // Calculate how many buckets we need based on density
+    if (count <= 8) {
+        // Tiny Economy: 1 generic bucket
+        num_ind_cats = 1; 
+    } 
+    else if (count <= 16) {
+        // Basic Economy (Temp/Arctic ~16 items): 2 buckets (Raw, Final)
+        num_ind_cats = 2; 
+    } 
+    else if (count <= 24) {
+        // Medium Economy: 3 buckets
+        num_ind_cats = 3; 
+    } 
+    else if (count <= 36) {
+        // Large Economy (Hot Country ~28 items): 4 buckets
+        // Total = 1 (Pass) + 4 (Ind) = 5 Categories
+        num_ind_cats = 4; 
+    } 
+    else {
+        // Huge Economy (Steeltown ~58 items): 5 buckets
+        // Total = 1 (Pass) + 5 (Ind) = 6 Categories
+        // Only if setting allows, otherwise cap at 4 industrial buckets
+        num_ind_cats = allow_6_cats ? 5 : 4; 
     }
-    
-    if (real_ids.len() > 20) {
-        ::CargoCat.append(real_ids.slice(10, 20)); // Cat 3 (10 items)
-        ::CargoCat.append(real_ids.slice(20));     // Cat 4 (Rest)
-    } else if (real_ids.len() > 10) {
-        ::CargoCat.append(real_ids.slice(10));     // Dump rest to Cat 3
+
+    // Slice the 'rest' array into equal-ish chunks
+    local chunk_size = ((count.tofloat()) / num_ind_cats).tointeger();
+    if (count % num_ind_cats != 0) chunk_size++; // Round up
+
+    local current_idx = 0;
+    for (local i = 0; i < num_ind_cats; i++) {
+        local end_idx = current_idx + chunk_size;
+        
+        // Safety: Clamp end index
+        if (end_idx > count) end_idx = count;
+        // Logic: If this is the last bucket, force it to take ALL remaining items
+        if (i == num_ind_cats - 1) end_idx = count;
+
+        if (current_idx < count) {
+            slices.append(rest.slice(current_idx, end_idx));
+        }
+        current_idx = end_idx;
     }
-    
-    // 4. Set Standard Settings for these categories
-    ::CargoLimiter <- [real_ids[0], real_ids[1]]; // Limit growth based on Pass/Mail
-    ::CargoCatList <- [CatLabels.PUBLIC_SERVICES, CatLabels.RAW_FOOD, CatLabels.RAW_MATERIALS, CatLabels.FINAL_PRODUCTS];
-    ::CargoMinPopDemand <- [0, 500, 1000, 4000];
-    ::CargoPermille <- [60, 25, 25, 10];
-    ::CargoDecay <- [0.4, 0.2, 0.2, 0.1];
+
+    // --- Map Slices to Properties ---
+    // FIX: Used '=' instead of ':' for table properties (Squirrel syntax)
+    local defs = [
+        { l = CatLabels.RAW_FOOD,          pop = 500,  perm = 25, dec = 0.2 },
+        { l = CatLabels.RAW_MATERIALS,     pop = 1000, perm = 25, dec = 0.2 },
+        { l = CatLabels.PROCESSED_MATERIALS, pop = 2000, perm = 15, dec = 0.1 },
+        { l = CatLabels.FINAL_PRODUCTS,    pop = 4000, perm = 15, dec = 0.1 },
+        { l = CatLabels.CATEGORY_V,        pop = 8000, perm = 10, dec = 0.05 } 
+    ];
+
+    foreach (i, slice in slices) {
+        if (i < defs.len()) {
+            local d = defs[i];
+            AddCat(slice, d.l, d.pop, d.perm, d.dec);
+        } else {
+            // Fallback if we somehow exceed our definitions
+             AddCat(slice, CatLabels.CATEGORY_V, 8000 + (i*2000), 10, 0.05);
+        }
+    }
     
     return true;
 }
