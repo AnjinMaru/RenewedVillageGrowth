@@ -13,10 +13,10 @@ require("version.nut");
 
 class MainClass extends GSInfo
     {
-    function GetAuthor()                { return "Firrel"; }
-    function GetName()                  { return "Renewed Village Growth"; }
-    function GetShortName()             { return "REVI"; }
-    function GetDescription()           { return "Towns require various cargo deliveries to grow. Required cargos can be randomized. Town growth is limited by percentage of transported specific cargos. Supporting most Industry NewGRF sets."; }
+    function GetAuthor()                { return "Anjin"; }
+    function GetName()                  { return "Renewed Village Growth FIRS5.2.0 fix"; }
+    function GetShortName()             { return "RVG5"; } //changed from REVI
+    function GetDescription()           { return "Fixfor RVG and FIRS5.x compatibility, based on the work done by ChronosXYZ and the original RVG"; }
     function GetURL()                   { return "https://www.tt-forums.net/viewtopic.php?f=65&t=87052"; }
     function GetVersion()               { return SELF_VERSION; }
     function GetDate()                  { return SELF_DATE; }
